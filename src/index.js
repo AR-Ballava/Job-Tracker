@@ -4,6 +4,7 @@ import pg from 'pg';
 import path from 'node:path'; import net from 'node:net';
 import dns from 'node:dns/promises'; import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import PAGE from './page.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch {}   // local dev only; on a host, use real env vars
@@ -222,6 +223,8 @@ app.set('trust proxy', 1);
 if (missing.length) app.use((_req, res) => res.status(500).type('text').send(   // readable message instead of a blank 500
   'Setup incomplete. Missing environment variable(s): ' + missing.join(', ') + '. Add them in Vercel > Settings > Environment Variables, then Redeploy.'));                                    // hosts put an HTTPS proxy in front
 app.use(express.json({ limit: '2mb' }));
+app.get(['/', '/index.html'], (_req, res) => res.type('html').set('Cache-Control', 'no-cache').send(PAGE));   // the UI
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
 app.use('/api', async (_req, _res, next) => { await init(); next(); });   // create tables once per instance
 app.get('/healthz', (_, res) => res.send('ok'));
 
