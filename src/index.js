@@ -11,9 +11,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 const now = () => new Date().toISOString();
 
 // ---------- storage: Postgres (Neon, added from the Vercel Marketplace). Tables are created on the first request ----------
-const DB_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-if (!DB_URL) throw new Error('DATABASE_URL is not set (see README)');
-const pool = new pg.Pool({ connectionString: DB_URL, max: 3, idleTimeoutMillis: 10000 });
+// Accepts DATABASE_URL, POSTGRES_URL, or any pooled postgres:// variable Vercel added (e.g. STORAGE_URL if you chose a custom prefix)
+const DB_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL ||
+  Object.entries(process.env).find(([k, v]) => /^postgres(ql)?:\/\//.test(v || '') && !/UNPOOLED|NON_POOLING/.test(k))?.[1];
+const missing = [!DB_URL && 'DATABASE_URL', !process.env.SESSION_SECRET && 'SESSION_SECRET'].filter(Boolean);
+const pool = DB_URL ? new pg.Pool({ connectionString: DB_URL, max: 3, idleTimeoutMillis: 10000 }) : null;
 const q = (text, params) => pool.query(text, params).then(r => r.rows);
 let ready;
 const init = () => ready ||= (async () => {
@@ -186,8 +188,7 @@ export async function build(url, pasted) {
 }
 
 // ---------- auth: email + password, signed cookie session (no extra libraries) ----------
-const SECRET = process.env.SESSION_SECRET;               // required: sessions are signed with it
-if (!SECRET) throw new Error('SESSION_SECRET is not set (see README)');
+const SECRET = process.env.SESSION_SECRET || 'missing';   // sessions are signed with it (required, checked below)
 const sign = v => { const b = Buffer.from(JSON.stringify(v)).toString('base64url'); return b + '.' + crypto.createHmac('sha256', SECRET).update(b).digest('base64url'); };
 function unsign(t) {
   try {
@@ -217,7 +218,9 @@ const auth = (req, res, next) => {
 
 // ---------- API ----------
 const app = express();
-app.set('trust proxy', 1);                                    // hosts put an HTTPS proxy in front
+app.set('trust proxy', 1);
+if (missing.length) app.use((_req, res) => res.status(500).type('text').send(   // readable message instead of a blank 500
+  'Setup incomplete. Missing environment variable(s): ' + missing.join(', ') + '. Add them in Vercel > Settings > Environment Variables, then Redeploy.'));                                    // hosts put an HTTPS proxy in front
 app.use(express.json({ limit: '2mb' }));
 app.use('/api', async (_req, _res, next) => { await init(); next(); });   // create tables once per instance
 app.get('/healthz', (_, res) => res.send('ok'));
