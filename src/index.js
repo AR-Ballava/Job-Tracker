@@ -29,7 +29,6 @@ const init = () => ready ||= (async () => {
   await q(`CREATE INDEX IF NOT EXISTS jobs_user ON jobs(user_id)`);
   await q(`CREATE TABLE IF NOT EXISTS history(id SERIAL PRIMARY KEY, job_id INT, status TEXT, at TEXT)`);
   await q(`CREATE TABLE IF NOT EXISTS llm_cache(k TEXT PRIMARY KEY, json TEXT)`);
-  await q(`CREATE TABLE IF NOT EXISTS attempts(k TEXT, at BIGINT)`);
 })().catch(e => { ready = null; throw e; });
 
 async function insert(o) {
@@ -202,12 +201,6 @@ function unsign(t) {
 const scrypt = (p, s) => new Promise((ok, no) => crypto.scrypt(p, s, 32, (e, k) => e ? no(e) : ok(k)));
 const hash = async p => { const s = crypto.randomBytes(16); return s.toString('hex') + ':' + (await scrypt(p, s)).toString('hex'); };
 const check = async (p, h) => { const [s, k] = h.split(':'); return crypto.timingSafeEqual(await scrypt(p, Buffer.from(s, 'hex')), Buffer.from(k, 'hex')); };
-async function limit(req) {                                  // brute-force guard stored in the DB (serverless has no shared memory): 10 tries / 15 min / IP
-  const t = Date.now();
-  await q('DELETE FROM attempts WHERE at<$1', [t - 9e5]);
-  if (Number((await q('SELECT count(*) c FROM attempts WHERE k=$1', [req.ip]))[0].c) >= 10) throw new Error('Too many attempts. Try again in 15 minutes.');
-  await q('INSERT INTO attempts VALUES($1,$2)', [req.ip, t]);
-}
 const EMAIL = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/, PASS = /^[A-Za-z0-9]{6,64}$/;
 const login = (req, res, uid) => res.setHeader('Set-Cookie', `sid=${sign({ uid, exp: Date.now() + 30 * 864e5 })}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${req.secure ? '; Secure' : ''}`);
 const creds = req => ({ email: String(req.body.email || '').trim().toLowerCase(), pw: String(req.body.password || '') });
@@ -229,7 +222,7 @@ app.use('/api', async (_req, _res, next) => { await init(); next(); });   // cre
 app.get('/healthz', (_, res) => res.send('ok'));
 
 app.post('/api/signup', async (req, res) => {
-  await limit(req); const { email, pw } = creds(req);
+  const { email, pw } = creds(req);
   if (!EMAIL.test(email)) throw new Error('Enter a valid email address');
   const allowed = (process.env.ALLOWED_EMAILS || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);   // signup is invite-only
   if (!allowed.includes(email)) throw new Error('Signup is limited to invited emails');
@@ -238,7 +231,7 @@ app.post('/api/signup', async (req, res) => {
   catch (e) { throw e.code == '23505' ? new Error('That email is already registered') : e; }
 });
 app.post('/api/login', async (req, res) => {
-  await limit(req); const { email, pw } = creds(req);
+  const { email, pw } = creds(req);
   const u = (await q('SELECT id,pw FROM users WHERE email=$1', [email]))[0];
   if (!u || !(await check(pw, u.pw))) throw new Error('Wrong email or password');
   login(req, res, u.id); res.json({ ok: true });
